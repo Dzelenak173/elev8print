@@ -737,3 +737,10 @@
     transform: scale(1) translateY(0);
   }
 }
+.consent-box { border: 1px solid #d8c7fc; border-radius: 12px; padding: 18px; margin: 20px 0; background: #faf7ff; }
+.consent-box legend { padding: 0 6px; font-weight: 700; color: #352557; }
+.consent-box label { display: flex; gap: 10px; align-items: flex-start; margin-bottom: 14px; line-height: 1.6; }
+.consent-box input[type="checkbox"] { width: 18px; height: 18px; flex: 0 0 18px; margin-top: 4px; accent-color: #6d28d9; }
+.consent-box a { color: #6d28d9; text-decoration: underline; }
+.consent-box p { font-size: 0.875rem; color: #5b5467; }
+.checkout-error { color: #9f1239; background: #fff1f2; padding: 12px; border-radius: 8px; margin: 12px 0; }

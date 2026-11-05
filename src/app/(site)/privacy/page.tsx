@@ -7,7 +7,7 @@ export default function PrivacyPage() {
     <div className={styles["privacy-container"]}>
       <div className={styles["privacy-header"]}>
         <h1>Privacy Policy</h1>
-        <p className={styles["last-updated"]}>Last updated: September 10, 2025</p>
+        <p className={styles["last-updated"]}>Last updated: November 4, 2026</p>
       </div>
 
       <div className={styles["privacy-content"]}>
@@ -25,6 +25,8 @@ export default function PrivacyPage() {
             <p>This may include your name, email address, phone number, billing and shipping addresses, and payment information.</p>
             <h3>Design Files and Content</h3>
             <p>When you upload designs, images, or other content for printing services, we collect and store these files to fulfill your orders. We treat your creative content with strict confidentiality.</p>
+            <h3>Proof and Approval Records</h3>
+            <p>For artwork approval, we retain the proof file and revision, production specifications, relevant permission-review notes, the terms shown, the name and email entered by the signer, their approval statements or change request, and the date and time. Approval links are confidential; share them only with an authorized representative. Proof files in the approval process are accessed through time-limited links.</p>
             <h3>Automatically Collected Information</h3>
             <p>We automatically collect certain information about your device and usage, including IP address, browser type, operating system, and pages visited on our site.</p>
           </div>
@@ -80,7 +82,7 @@ export default function PrivacyPage() {
               <li>Request a copy of your data</li>
               <li>Withdraw consent for data processing</li>
             </ul>
-            <p>To exercise these rights, please contact us at privacy@elev8print.com</p>
+          <p>To exercise these rights, please contact us at office@elev8print.com</p>
           </div>
         </section>
 
@@ -94,7 +96,7 @@ export default function PrivacyPage() {
         <section className={styles["privacy-section"]}>
           <h2>7. Data Retention</h2>
           <div className={styles["section-content"]}>
-            <p>We retain your personal information for as long as necessary to fulfill the purposes outlined in this policy, comply with legal obligations, and resolve disputes. Design files are typically retained for 30 days after order completion unless you request longer storage.</p>
+            <p>We retain information for as long as necessary for fulfillment, relevant reprints, legal obligations, dispute handling, and insurance or claims needs. Proofs and approval records can be kept longer than ordinary working design files so we can establish what was reviewed and authorized. Expiration of an approval link does not delete its underlying record. Contact us about access, correction, or deletion requests; some records may need to be retained for these purposes.</p>
           </div>
         </section>
 
@@ -125,8 +127,7 @@ export default function PrivacyPage() {
             <p>If you have any questions about this privacy policy or our data practices, please contact us:</p>
             <div className={styles["contact-info"]}>
               <p><strong>ELEV8 PRINT</strong></p>
-              <p>Email: admin@elaborate-designs.com</p>
-              <p>Phone: (248) 884-3965</p>
+            <p>Email: office@elev8print.com</p>
             </div>
           </div>
         </section>

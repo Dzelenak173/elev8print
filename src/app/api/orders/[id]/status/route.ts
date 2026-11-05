@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase-admin";
 import { verifyAdminToken } from "@/lib/auth";
+import { ORDER_STATUSES } from "@/lib/approval-policy";
 
 export async function PATCH(
   request: Request,
@@ -19,9 +20,9 @@ export async function PATCH(
     const { id } = await params;
     const { status } = await request.json();
 
-    if (!status) {
+    if (typeof status !== "string" || !ORDER_STATUSES.includes(status)) {
       return NextResponse.json(
-        { error: "Status is required" },
+        { error: "Choose a valid order status." },
         { status: 400 }
       );
     }
@@ -32,6 +33,7 @@ export async function PATCH(
       .eq("id", id)
       .select();
 
+    if (error?.code === "P0001") return NextResponse.json({ success: false, error: error.message }, { status: 409 });
     if (error) throw error;
 
     if (!data || data.length === 0) {

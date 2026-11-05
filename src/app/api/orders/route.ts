@@ -1,27 +1,40 @@
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase-admin";
 import sgMail from "@/lib/sendgrid";
+import { verifyAdminToken } from "@/lib/auth";
+import { requireCheckoutConsent, validEmail } from "@/lib/approval-policy";
+import { TERMS_VERSION, termsSnapshot } from "@/lib/terms";
 
 function generateTrackId() {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
-export async function GET() {
+export async function GET(request: Request) {
+  if (!verifyAdminToken(request.headers.get("authorization"))) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401, headers: { "Cache-Control": "private, no-store" } });
+  }
   const { data, error } = await supabase
     .from("orders")
-    .select("*")
+    .select("id,track_id,customer_name,customer_email,customer_phone,address_street,address_city,address_state,address_zip,order_notes,items,total,status,created_at,terms_version,terms_accepted_at,artwork_rights_accepted_at")
     .order("created_at", { ascending: false });
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  return NextResponse.json({ orders: data });
+  return NextResponse.json({ orders: data }, { headers: { "Cache-Control": "private, no-store" } });
 }
 
 export async function POST(request: Request) {
   try {
-    const { customer, items, total, user_id = null } = await request.json();
+    const body = await request.json();
+    try { requireCheckoutConsent(body, TERMS_VERSION); }
+    catch (error) { return NextResponse.json({ success: false, error: error instanceof Error ? error.message : "Accept the terms first." }, { status: 400 }); }
+    const { customer, items, total, user_id = null } = body;
+    if (!customer || !validEmail(customer.email) || typeof customer.name !== "string" || !customer.name.trim() || !Array.isArray(items) || !items.length) {
+      return NextResponse.json({ success: false, error: "Complete the customer and order details." }, { status: 400 });
+    }
+    const acceptedAt = new Date().toISOString();
     const track_id = generateTrackId();
     const orderPayload: Record<string, unknown> = {
       track_id,
@@ -35,6 +48,10 @@ export async function POST(request: Request) {
       order_notes: customer.notes,
       items,
       total,
+      terms_version: TERMS_VERSION,
+      terms_snapshot: termsSnapshot(),
+      terms_accepted_at: acceptedAt,
+      artwork_rights_accepted_at: acceptedAt,
     };
 
     if (user_id) orderPayload.user_id = user_id;

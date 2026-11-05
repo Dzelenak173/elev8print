@@ -2,7 +2,12 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
+import dynamic from "next/dynamic";
+import { UUID_PATTERN } from "@/lib/approval-policy";
+import Link from "next/link";
 import styles from "./admin.module.css";
+
+const ProofPortal = dynamic(() => import("@/components/approvals/ProofPortal"), { ssr: false });
 
 interface OrderItem {
   id: string;
@@ -41,36 +46,6 @@ interface Post {
   status: string;
 }
 
-const SAMPLE_ORDERS: Order[] = [
-  {
-    id: "168cc85c-f1d9-4866-8f1c-cf0ed2b37e47",
-    track_id: "sample",
-    customer_name: "Zachary Bernier",
-    customer_email: "zachmplayz@gmail.com",
-    customer_phone: "2488054381",
-    address_street: "4141 bold meadows",
-    address_city: "Oakland TWP",
-    address_state: "MI",
-    address_zip: "48306",
-    order_notes: "do a good job please.",
-    items: [
-      {
-        id: "b341e4ad-5c15-4a37-975a-2d2321afef11",
-        size: { label: "2x2" },
-        material: "matte",
-        quantity: 56,
-        subtotal: 26.32,
-        unitPrice: 0.47,
-        productType: "sticker",
-        designFileUrl: "https://toumtrpoyddztminldto.supabase.co/storage/v1/object/public/designs/1757526638991-b341e4ad-5c15-4a37-975a-2d2321afef11-assets_task_01k4rvqq2decatct126mc2aqqd_1757476072_img_1.webp",
-      },
-    ],
-    total: 509.89,
-    status: "completed",
-    created_at: "2025-09-10T17:50:40.002809+00:00",
-  },
-];
-
 function authHeaders(): Record<string, string> {
   const token = typeof window !== "undefined" ? localStorage.getItem("adminToken") : null;
   return token ? { Authorization: `Bearer ${token}` } : {};
@@ -82,8 +57,10 @@ export default function AdminPage() {
   const [loginError, setLoginError] = useState("");
   const [showAlert, setShowAlert] = useState(false);
   const [alertMessage, setAlertMessage] = useState("");
-  const [activeTab, setActiveTab] = useState<"orders" | "posts">("orders");
+  const [activeTab, setActiveTab] = useState<"orders" | "posts" | "approvals">("orders");
+  const [approvalOrderId, setApprovalOrderId] = useState<string | undefined>();
   const [orders, setOrders] = useState<Order[]>([]);
+  const [ordersError, setOrdersError] = useState("");
   const [loading, setLoading] = useState(true);
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [statusFilter, setStatusFilter] = useState("");
@@ -93,6 +70,19 @@ export default function AdminPage() {
   const [postStatusFilter, setPostStatusFilter] = useState("pending");
   const [editingPostId, setEditingPostId] = useState<string | null>(null);
   const [editDescription, setEditDescription] = useState("");
+
+  const approvalOrders = useMemo(
+    () => orders.map(({ id, track_id, customer_name, customer_email, status }) => ({
+      id, track_id, customer_name, customer_email, status,
+    })),
+    [orders],
+  );
+
+  const openApprovals = (id?: string) => {
+    setApprovalOrderId(id);
+    setSelectedOrder(null);
+    setActiveTab("approvals");
+  };
 
   const showToast = (msg: string) => {
     setAlertMessage(msg);
@@ -104,9 +94,12 @@ export default function AdminPage() {
     try {
       const res = await fetch("/api/orders", { headers: authHeaders() });
       const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Unable to load orders. Sign in again if your session expired.");
+      setOrdersError("");
       setOrders(data.orders || []);
-    } catch {
-      setOrders(SAMPLE_ORDERS);
+    } catch (error) {
+      setOrders([]);
+      setOrdersError(error instanceof Error ? error.message : "Unable to load orders.");
     } finally {
       setLoading(false);
     }
@@ -127,6 +120,12 @@ export default function AdminPage() {
   useEffect(() => {
     if (typeof window !== "undefined" && localStorage.getItem("adminToken")) {
       setIsAuthenticated(true);
+    }
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("tab") === "approvals") {
+      setActiveTab("approvals");
+      const orderId = params.get("order");
+      if (orderId && UUID_PATTERN.test(orderId)) setApprovalOrderId(orderId);
     }
   }, []);
 
@@ -195,7 +194,7 @@ export default function AdminPage() {
         setOrders((prev) => prev.map((o) => (o.id === order.id ? { ...o, status: data.order.status } : o)));
         showToast(`Order status updated to: ${data.order.status}`);
       } else {
-        showToast("Failed to update order status.");
+        showToast(data.error || "Failed to update order status.");
       }
     } catch {
       showToast("Error updating order status.");
@@ -214,7 +213,7 @@ export default function AdminPage() {
         setOrders((prev) => prev.filter((o) => o.id !== orderId));
         alert(`Order ${orderId} deleted successfully.`);
       } else {
-        alert("Failed to delete order.");
+        alert(data.error || "Failed to delete order.");
       }
     } catch {
       alert("There was an error deleting this order. Please try again.");
@@ -232,33 +231,24 @@ export default function AdminPage() {
     });
   };
 
-  const handleApprove = async (id: string) => {
+  const reviewPost = async (id: string, status: "approved" | "denied") => {
     try {
-      await fetch("https://hook.us2.make.com/u9m1hzxj5uiy364dylalh78r499d47r0", {
+      const res = await fetch("/api/posts/review", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id, status: "approved" }),
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ id, status }),
       });
-      setPosts((prev) => prev.map((p) => (p.id === id ? { ...p, status: "approved" } : p)));
-      showToast("Post approved successfully!");
-    } catch {
-      console.error("Failed to approve post");
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Unable to update this post.");
+      setPosts((prev) => prev.map((post) => post.id === id ? { ...post, status } : post));
+      showToast(status === "approved" ? "Post approved successfully!" : "Post denied.");
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "Unable to update this post.");
     }
   };
 
-  const handleDeny = async (id: string) => {
-    try {
-      await fetch("https://hook.us2.make.com/u9m1hzxj5uiy364dylalh78r499d47r0", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id, status: "denied" }),
-      });
-      setPosts((prev) => prev.map((p) => (p.id === id ? { ...p, status: "denied" } : p)));
-      showToast("Post denied.");
-    } catch {
-      console.error("Failed to deny post");
-    }
-  };
+  const handleApprove = (id: string) => reviewPost(id, "approved");
+  const handleDeny = (id: string) => reviewPost(id, "denied");
 
   const formatDate = (dateString: string) =>
     new Date(dateString).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
@@ -327,6 +317,7 @@ export default function AdminPage() {
         <div className={styles["tab-navigation"]}>
           <button type="button" onClick={() => setActiveTab("orders")} className={`${styles["tab-btn"]} ${activeTab === "orders" ? styles.active : ""}`}>📦 Orders</button>
           <button type="button" onClick={() => setActiveTab("posts")} className={`${styles["tab-btn"]} ${activeTab === "posts" ? styles.active : ""}`}>📝 Posts Review</button>
+          <button type="button" onClick={() => openApprovals()} className={`${styles["tab-btn"]} ${activeTab === "approvals" ? styles.active : ""}`}>Artwork Approvals</button>
         </div>
 
         {activeTab === "orders" && (
@@ -379,6 +370,7 @@ export default function AdminPage() {
                 </select>
               </div>
 
+              {ordersError ? <p role="alert">{ordersError}</p> : null}
               {loading ? (
                 <div className={styles["loading-state"]}>Loading orders...</div>
               ) : (
@@ -427,6 +419,7 @@ export default function AdminPage() {
                       <div className={styles["col-date"]}>{formatDate(order.created_at)}</div>
                       <div className={styles["col-actions"]}>
                         <button type="button" onClick={() => setSelectedOrder(order)} className={`${styles["action-btn"]} ${styles["view-btn"]}`}>View</button>
+                        <button type="button" onClick={() => openApprovals(order.id)} className={`${styles["action-btn"]} ${styles["view-btn"]}`}>Artwork</button>
                         <button type="button" onClick={() => deleteOrder(order.id)} className={`${styles["action-btn"]} ${styles["delete-btn"]}`}>Delete</button>
                       </div>
                     </div>
@@ -435,6 +428,10 @@ export default function AdminPage() {
               )}
             </div>
           </div>
+        )}
+
+        {activeTab === "approvals" && (
+          <ProofPortal staff websiteOrders={approvalOrders} selectedOrderId={approvalOrderId} />
         )}
 
         {activeTab === "posts" && (
@@ -555,6 +552,7 @@ export default function AdminPage() {
                 </div>
                 <div className={styles["detail-section"]}>
                   <h4>Order Information</h4>
+                  <p><button type="button" onClick={() => openApprovals(selectedOrder.id)} className={styles["view-btn"]}>Create / review artwork approval</button></p>
                   <p><strong>Date:</strong> {formatDate(selectedOrder.created_at)}</p>
                   <p><strong>Status:</strong> {selectedOrder.status}</p>
                   <p><strong>Total:</strong> ${selectedOrder.total.toFixed(2)}</p>

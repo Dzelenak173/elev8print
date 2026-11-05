@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCart, type CartItem, type CartSize } from "@/lib/cart";
 import { supabase } from "@/lib/supabase";
+import { TERMS_VERSION } from "@/lib/terms";
 import styles from "./cart.module.css";
 
 const SHAPES = [
@@ -49,6 +50,9 @@ export default function CartPage() {
   const [updating, setUpdating] = useState(false);
   const [showCheckoutModal, setShowCheckoutModal] = useState(false);
   const [submittingOrder, setSubmittingOrder] = useState(false);
+  const [termsAccepted, setTermsAccepted] = useState(false);
+  const [rightsConfirmed, setRightsConfirmed] = useState(false);
+  const [checkoutError, setCheckoutError] = useState("");
   const [checkoutData, setCheckoutData] = useState({
     email: "",
     name: "",
@@ -85,7 +89,11 @@ export default function CartPage() {
   };
 
   const closeCheckoutModal = () => {
+    if (submittingOrder) return;
     setShowCheckoutModal(false);
+    setTermsAccepted(false);
+    setRightsConfirmed(false);
+    setCheckoutError("");
     setCheckoutData({ email: "", name: "", phone: "", street: "", city: "", state: "", zipCode: "", notes: "" });
   };
 
@@ -94,12 +102,15 @@ export default function CartPage() {
     formData.append("file", file, `${id}-${file.name}`);
     const res = await fetch("/api/orders/upload", { method: "POST", body: formData });
     const data = await res.json();
+    if (!res.ok || !data.url) throw new Error(data.error || "Artwork upload failed.");
     return data.url as string;
   };
 
   const submitOrder = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!cartItems.length) return;
+    setCheckoutError("");
+    if (!termsAccepted || !rightsConfirmed) { setCheckoutError("Please accept the terms and confirm your artwork rights."); return; }
 
     setSubmittingOrder(true);
     try {
@@ -125,6 +136,7 @@ export default function CartPage() {
         items: processedItems,
         total: cart.total,
         user_id: user ? user.id : null,
+        acceptance: { termsAccepted, rightsConfirmed, termsVersion: TERMS_VERSION },
       };
 
       const res = await fetch("/api/orders", {
@@ -133,13 +145,14 @@ export default function CartPage() {
         body: JSON.stringify(orderPayload),
       });
       const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || "Unable to place the order. Please try again.");
 
       if (data.success) {
         cart.clear();
         router.push(`/track/${data.order.track_id}`);
       }
-    } catch {
-      alert("Failed to place order.");
+    } catch (error) {
+      setCheckoutError(error instanceof Error ? error.message : "Unable to place the order. Please try again.");
     } finally {
       setSubmittingOrder(false);
     }
@@ -361,7 +374,14 @@ export default function CartPage() {
                     <strong>Total: ${cart.total}</strong>
                   </div>
 
-                  <button type="submit" className={`${styles.btn} ${styles.primary}`} disabled={submittingOrder}>
+                  <fieldset className={styles["consent-box"]}>
+                    <legend>Artwork rights and terms</legend>
+                    <label><input type="checkbox" checked={termsAccepted} onChange={e => setTermsAccepted(e.target.checked)} required /> <span>I have read and agree to the <Link href="/tos" target="_blank" rel="noopener noreferrer">Terms of Service</Link> (version {TERMS_VERSION}).</span></label>
+                    <label><input type="checkbox" checked={rightsConfirmed} onChange={e => setRightsConfirmed(e.target.checked)} required /> <span>I own the artwork or have the necessary permission for its intended printing and use, and I am authorized to submit it. I can provide supporting permission if requested.</span></label>
+                    <p>Placing this order does not approve artwork for printing. You will review and approve the final proof separately. Changes require a new approval.</p>
+                  </fieldset>
+                  {checkoutError && <p role="alert" className={styles["checkout-error"]}>{checkoutError}</p>}
+                  <button type="submit" className={`${styles.btn} ${styles.primary}`} disabled={submittingOrder || !termsAccepted || !rightsConfirmed}>
                     {submittingOrder ? "Placing Order..." : "Place Order"}
                   </button>
                 </form>
