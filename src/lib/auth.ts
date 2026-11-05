@@ -21,7 +21,7 @@ export function verifyAdminToken(
       token,
       process.env.JWT_SECRET!
     ) as AdminTokenPayload;
-    return decoded;
+    return decoded.role === "admin" ? decoded : null;
   } catch {
     return null;
   }

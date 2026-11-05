@@ -20,6 +20,7 @@ export async function DELETE(
 
     const { error } = await supabase.from("orders").delete().eq("id", id);
 
+    if (error?.code === "23503") return NextResponse.json({ success: false, error: "This order has proof records. Cancel the order instead so its approval history is retained." }, { status: 409 });
     if (error) throw error;
 
     return NextResponse.json({
