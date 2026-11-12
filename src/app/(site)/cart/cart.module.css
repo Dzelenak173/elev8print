@@ -137,6 +137,19 @@
   margin-bottom: 5px;
 }
 
+.item-details { min-width: 0; }
+
+.item-artwork {
+  margin-top: 10px;
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.item-artwork p { margin-bottom: 5px; }
+.item-artwork label { display: block; margin-bottom: 4px; font-weight: 600; }
+.item-artwork input { display: block; width: 100%; max-width: 260px; font-size: 0.75rem; }
+.item-artwork [role="alert"] { color: #b91c1c; }
+
 .item-specs {
   color: #6b7280;
   font-size: 0.9rem;

@@ -7,6 +7,7 @@ import { getStickerPricing } from "./pricing";
 import { getMylarPricing, mylarBagSizes } from "./mylarPricing";
 import { stickerQuantity } from "./sticker-pricing";
 import { checkoutTotals } from "./order-totals";
+import { artworkPreview, deleteCartArtwork, expectsArtwork, isArtworkFile, readCartArtwork, releaseArtworkPreview, saveCartArtwork } from "./cart-artwork";
 
 const STORAGE_KEY = "elevate_cart_v1";
 
@@ -29,6 +30,10 @@ export interface CartItem {
   quantity: number;
   designFileId?: string | null | File;
   previewUrl?: string | null;
+  artworkId?: string | null;
+  artworkName?: string | null;
+  artworkExpected?: boolean;
+  artworkMissing?: boolean;
   unitPrice: number;
   subtotal: number;
   shape?: string | null;
@@ -55,8 +60,10 @@ interface CartStore {
   addItem: (params: AddItemParams) => Promise<string>;
   updateQuantity: (id: string, quantity: number) => Promise<void>;
   refreshPrices: () => Promise<void>;
-  removeItem: (id: string) => void;
-  clear: () => void;
+  restoreArtwork: () => Promise<CartItem[]>;
+  attachArtwork: (id: string, file: File) => Promise<void>;
+  removeItem: (id: string) => Promise<void>;
+  clear: () => Promise<void>;
 }
 
 async function priceItem(productType: "sticker" | "mylar", size: CartSize | string, quantity: number) {
@@ -89,20 +96,25 @@ export const useCartStore = create<CartStore>()(
         quantity,
         shape = null,
         designFileId = null,
-        previewUrl = null,
         frontDesign = null,
         backDesign = null,
       }) => {
         const price = await priceItem(productType, size, quantity);
 
         const id = cryptoRandom();
+        const file = isArtworkFile(designFileId) ? designFileId : null;
+        if (file) await saveCartArtwork(id, file);
         const item: CartItem = {
           id,
           productType,
           size,
           quantity: price.qty,
-          designFileId,
-          previewUrl,
+          designFileId: file,
+          previewUrl: file ? artworkPreview(file) : null,
+          artworkId: file ? id : null,
+          artworkName: file?.name || null,
+          artworkExpected: Boolean(designFileId),
+          artworkMissing: Boolean(designFileId) && !file,
           unitPrice: price.unitPrice,
           subtotal: price.subtotal,
           shape,
@@ -135,20 +147,73 @@ export const useCartStore = create<CartStore>()(
         }) }));
       },
 
-      removeItem: (id) => {
-        set({ items: get().items.filter((i) => i.id !== id) });
+      restoreArtwork: async () => {
+        const restored = await Promise.all(get().items.map(async (item) => {
+          if (item.productType !== "sticker") return null;
+          if (isArtworkFile(item.designFileId) && item.artworkId) return null;
+          const key = item.artworkId || item.id;
+          let file = isArtworkFile(item.designFileId) ? item.designFileId : null;
+          if (file) await saveCartArtwork(key, file);
+          else if (item.artworkId) file = await readCartArtwork(item.artworkId);
+          return { id: item.id, previousKey: item.artworkId, key, file, expected: expectsArtwork(item) };
+        }));
+        set((state) => ({ items: state.items.map((item) => {
+          const result = restored.find((entry) => entry?.id === item.id && entry.previousKey === item.artworkId);
+          if (!result) return item;
+          releaseArtworkPreview(item.previewUrl);
+          return { ...item, designFileId: result.file, previewUrl: result.file ? artworkPreview(result.file) : null,
+            artworkId: result.file ? result.key : item.artworkId, artworkName: result.file?.name || item.artworkName,
+            artworkExpected: result.expected, artworkMissing: result.expected && !result.file };
+        }) }));
+        return get().items;
       },
 
-      clear: () => {
+      attachArtwork: async (id, file) => {
+        if (!get().items.some((item) => item.id === id)) return;
+        // Each replacement gets a new key, so an older restore cannot overwrite it.
+        const key = cryptoRandom();
+        await saveCartArtwork(key, file);
+        const item = get().items.find((entry) => entry.id === id);
+        if (!item) { await deleteCartArtwork(key); return; }
+        releaseArtworkPreview(item.previewUrl);
+        set((state) => ({ items: state.items.map((entry) => entry.id === id ? {
+          ...entry, designFileId: file, previewUrl: artworkPreview(file), artworkId: key,
+          artworkName: file.name, artworkExpected: true, artworkMissing: false,
+        } : entry) }));
+        if (item.artworkId) void deleteCartArtwork(item.artworkId).catch(() => { /* A leftover local draft must not undo its replacement. */ });
+      },
+
+      removeItem: async (id) => {
+        const item = get().items.find((entry) => entry.id === id);
+        releaseArtworkPreview(item?.previewUrl);
+        set({ items: get().items.filter((i) => i.id !== id) });
+        if (item?.artworkId) await deleteCartArtwork(item.artworkId).catch(() => { /* The cart item is already removed. */ });
+      },
+
+      clear: async () => {
+        const items = get().items;
+        items.forEach((item) => releaseArtworkPreview(item.previewUrl));
         set({ items: [] });
+        await Promise.all(items.map((item) => item.artworkId ? deleteCartArtwork(item.artworkId).catch(() => { /* Best-effort local draft cleanup. */ }) : undefined));
       },
     }),
     {
       name: STORAGE_KEY,
       partialize: (state) => ({
-        items: state.items,
+        items: state.items.map(({ designFileId, previewUrl, artworkMissing, ...item }) => {
+          void artworkMissing;
+          return { ...item, artworkExpected: expectsArtwork({ ...item, designFileId, previewUrl }) };
+        }),
         currency: state.currency,
       }),
+      merge: (persisted, current) => {
+        const saved = persisted as Partial<CartStore> | undefined;
+        return { ...current, currency: saved?.currency || current.currency,
+          items: Array.isArray(saved?.items) ? saved.items.map((item) => ({
+            ...item, designFileId: null, previewUrl: null,
+            artworkExpected: expectsArtwork(item), artworkMissing: expectsArtwork(item),
+          })) : current.items };
+      },
     },
   ),
 );
@@ -159,6 +224,8 @@ export function useCart() {
   const addItem = useCartStore((s) => s.addItem);
   const updateQuantity = useCartStore((s) => s.updateQuantity);
   const refreshPrices = useCartStore((s) => s.refreshPrices);
+  const restoreArtwork = useCartStore((s) => s.restoreArtwork);
+  const attachArtwork = useCartStore((s) => s.attachArtwork);
   const removeItem = useCartStore((s) => s.removeItem);
   const clear = useCartStore((s) => s.clear);
 
@@ -179,6 +246,8 @@ export function useCart() {
     addItem,
     updateQuantity,
     refreshPrices,
+    restoreArtwork,
+    attachArtwork,
     removeItem,
     clear,
     totalQty,

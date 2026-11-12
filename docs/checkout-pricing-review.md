@@ -1,6 +1,6 @@
 # Checkout pricing review — November 12, 2026
 
-This branch is a proposed pricing correction for owner review. It is not a production release.
+This branch contains proposed pricing and cart artwork corrections for owner review. It is not a production release.
 
 ## Pricing behavior
 
@@ -26,7 +26,7 @@ Custom dimensions retain the existing external StickerApp benchmark through the 
 
 ## Shipping and tax follow-up
 
-The existing $8.50 shipping charge and $150 free-shipping threshold remain in this pricing-only draft; the negative notice is corrected to use the actual threshold. The existing 6% tax estimate is shared by browser and server. It is not a completed destination-based tax system. Review these policies before a production release; this branch does not establish their suitability.
+The existing $8.50 shipping charge and $150 free-shipping threshold remain in this draft; the negative notice is corrected to use the actual threshold. The existing 6% tax estimate is shared by browser and server. It is not a completed destination-based tax system. Review these policies before a production release; this branch does not establish their suitability.
 
 The owner uses Pirate Ship. Its official support says it has no public API and does not supply live website checkout rates. Keep label purchases there. Recommended next shipping phase:
 
@@ -46,6 +46,16 @@ Official references:
 - https://www.michigan.gov/taxes/business-taxes/sales-use-tax
 - https://www.michigan.gov/taxes/business-taxes/sales-use-tax/delivery-and-installation-charges
 
+## Cart artwork
+
+Sticker originals are committed to the browser's IndexedDB before a cart item is added. Only file identifiers and names are persisted with the JSON cart; File objects and image data/thumbnail URLs are excluded. Reopening the cart restores the original File, including its name and MIME type, and regenerates a temporary PNG/JPG preview. PDF/AI/CDR originals have an attached-file state instead of a broken image preview. Customers can attach or replace artwork directly in the cart.
+
+If an expected original is missing (including old carts that serialized Files as empty objects), specifications and quantities remain, but checkout requires reattachment. The entire cart is checked before any upload; upload failures stop order creation. A cart item that never had artwork retains its existing optional-file behavior. Storage failures show an actionable error instead of claiming an original was saved. Old restore results cannot overwrite replacements or resurrect removed rows. Removing items and completing checkout clean up local draft files on a best-effort basis.
+
+This is same-browser draft persistence, not cross-device sync or permanent backup. Clearing site data or ending a private browsing session can remove local drafts. The existing server upload bucket and its visibility are unchanged; private-original storage hardening is a separate follow-up, and private approval proofs remain untouched.
+
+The advertised 10 MB exceeded the existing Vercel upload route's documented 4.5 MB request limit. This preview accepts up to 4 MB per original, leaving room for multipart framing and showing that limit before checkout. Supporting larger originals should use a separately reviewed direct-to-storage upload flow. Reference: https://vercel.com/docs/functions/limitations#request-body-size
+
 ## Verification boundary
 
-Automated tests exercise maker pricing, actual Zustand cart actions, the pricing route, order validation and the real order POST handler. Database/email transport is replaced in order tests; no hosted test order or real customer email is created. The existing artwork approval database and API tests remain part of the regression suite. Original artwork surviving a full cart refresh is a separate outstanding fix; preserving a File while recalculating an in-memory cart does not solve its JSON persistence.
+Automated tests exercise maker pricing, actual Zustand cart actions, the pricing route, order validation and the real order POST handler. Artwork tests use fake IndexedDB and an actual persist/rehydrate cycle, compare the restored/uploaded bytes by SHA-256, exercise missing originals and legacy carts, and simulate storage commit and upload failures. The upload FormData is inspected through a replaced fetch transport. Database/email transport is replaced in order tests; no hosted test order, real original upload or customer email is created. The existing artwork approval database and API tests remain part of the regression suite.
