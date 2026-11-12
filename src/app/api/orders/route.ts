@@ -4,6 +4,8 @@ import sgMail from "@/lib/sendgrid";
 import { verifyAdminToken } from "@/lib/auth";
 import { requireCheckoutConsent, validEmail } from "@/lib/approval-policy";
 import { TERMS_VERSION, termsSnapshot } from "@/lib/terms";
+import { quoteOrder, orderMatchesQuote } from "@/lib/checkout-pricing";
+import { PricingInputError } from "@/lib/sticker-pricing";
 
 function generateTrackId() {
   return Math.floor(100000 + Math.random() * 900000).toString();
@@ -30,10 +32,19 @@ export async function POST(request: Request) {
     const body = await request.json();
     try { requireCheckoutConsent(body, TERMS_VERSION); }
     catch (error) { return NextResponse.json({ success: false, error: error instanceof Error ? error.message : "Accept the terms first." }, { status: 400 }); }
-    const { customer, items, total, user_id = null } = body;
-    if (!customer || !validEmail(customer.email) || typeof customer.name !== "string" || !customer.name.trim() || !Array.isArray(items) || !items.length) {
+    const { customer, items: submittedItems, total: submittedTotal, user_id = null } = body;
+    if (!customer || !validEmail(customer.email) || typeof customer.name !== "string" || !customer.name.trim() || !Array.isArray(submittedItems) || !submittedItems.length) {
       return NextResponse.json({ success: false, error: "Complete the customer and order details." }, { status: 400 });
     }
+    let quote;
+    try { quote = await quoteOrder(submittedItems); }
+    catch (error) {
+      return NextResponse.json({ success: false, error: error instanceof PricingInputError ? error.message : "Unable to verify prices. Please try again." }, { status: error instanceof PricingInputError ? 400 : 503 });
+    }
+    if (!orderMatchesQuote(submittedItems, submittedTotal, quote)) {
+      return NextResponse.json({ success: false, code: "PRICE_CHANGED", error: "Your cart prices have changed. Review the updated prices before placing your order.", quote }, { status: 409, headers: { "Cache-Control": "no-store" } });
+    }
+    const { items, total } = quote;
     const acceptedAt = new Date().toISOString();
     const track_id = generateTrackId();
     const orderPayload: Record<string, unknown> = {

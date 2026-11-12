@@ -1,11 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCart, type CartItem, type CartSize } from "@/lib/cart";
 import { supabase } from "@/lib/supabase";
 import { TERMS_VERSION } from "@/lib/terms";
+import { FREE_SHIPPING_SUBTOTAL } from "@/lib/order-totals";
 import styles from "./cart.module.css";
 
 const SHAPES = [
@@ -48,6 +49,8 @@ export default function CartPage() {
   const cart = useCart();
 
   const [updating, setUpdating] = useState(false);
+  const [pricingBusy, setPricingBusy] = useState(true);
+  const [pricingError, setPricingError] = useState("");
   const [showCheckoutModal, setShowCheckoutModal] = useState(false);
   const [submittingOrder, setSubmittingOrder] = useState(false);
   const [termsAccepted, setTermsAccepted] = useState(false);
@@ -65,6 +68,14 @@ export default function CartPage() {
   });
 
   const cartItems = cart.state.items;
+  const refreshPrices = cart.refreshPrices;
+  useEffect(() => {
+    let cancelled = false;
+    refreshPrices().catch((error) => {
+      if (!cancelled) setPricingError(error instanceof Error ? error.message : "Unable to verify cart prices.");
+    }).finally(() => { if (!cancelled) setPricingBusy(false); });
+    return () => { cancelled = true; };
+  }, [refreshPrices]);
 
   const updateQuantity = async (itemId: string, newQuantity: number) => {
     if (newQuantity < 1 || updating) return;
@@ -108,7 +119,7 @@ export default function CartPage() {
 
   const submitOrder = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!cartItems.length) return;
+    if (!cartItems.length || pricingBusy || pricingError || updating) return;
     setCheckoutError("");
     if (!termsAccepted || !rightsConfirmed) { setCheckoutError("Please accept the terms and confirm your artwork rights."); return; }
 
@@ -145,6 +156,11 @@ export default function CartPage() {
         body: JSON.stringify(orderPayload),
       });
       const data = await res.json();
+      if (res.status === 409 && data.code === "PRICE_CHANGED") {
+        await refreshPrices();
+        setCheckoutError("Prices have been updated. Review the order summary, then place your order again.");
+        return;
+      }
       if (!res.ok || !data.success) throw new Error(data.error || "Unable to place the order. Please try again.");
 
       if (data.success) {
@@ -215,7 +231,7 @@ export default function CartPage() {
                   <div className={styles["item-quantity"]}>
                     <button type="button" onClick={() => updateQuantity(item.id, item.quantity - 1)} disabled={item.quantity <= 1 || updating}>-</button>
                     <span>{item.quantity}</span>
-                    <button type="button" onClick={() => updateQuantity(item.id, item.quantity + 1)} disabled={updating}>+</button>
+                    <button type="button" onClick={() => updateQuantity(item.id, item.quantity + 1)} disabled={updating || item.quantity >= 10000}>+</button>
                   </div>
                   <div className={styles["item-price"]}>
                     <span className={styles.price}>${item.subtotal}</span>
@@ -229,6 +245,8 @@ export default function CartPage() {
             <div className={styles["cart-summary"]}>
               <div className={styles["summary-card"]}>
                 <h3>Order Summary</h3>
+                {pricingBusy && <p role="status">Checking current prices…</p>}
+                {pricingError && <p role="alert">{pricingError} <button type="button" onClick={() => { setPricingBusy(true); refreshPrices().then(() => setPricingError("")).catch(error => setPricingError(error.message)).finally(() => setPricingBusy(false)); }}>Try again</button></p>}
                 <div className={styles["summary-row"]}>
                   <span>Subtotal ({cart.totalQty} items)</span>
                   <span>${cart.subtotal}</span>
@@ -247,11 +265,11 @@ export default function CartPage() {
                 </div>
                 {cart.shipping > 0 && (
                   <div className={styles["shipping-notice"]}>
-                    <p>Add ${(50 - cart.subtotal).toFixed(2)} more for free shipping!</p>
+                    <p>Add ${Math.max(0, FREE_SHIPPING_SUBTOTAL - cart.subtotal).toFixed(2)} more for free shipping!</p>
                   </div>
                 )}
                 <div className={styles["checkout-actions"]}>
-                  <button type="button" className={`${styles.btn} ${styles.primary} ${styles["checkout-btn"]}`} onClick={() => setShowCheckoutModal(true)} disabled={updating}>
+                  <button type="button" className={`${styles.btn} ${styles.primary} ${styles["checkout-btn"]}`} onClick={() => setShowCheckoutModal(true)} disabled={updating || pricingBusy || !!pricingError}>
                     Proceed to Checkout
                   </button>
                   <Link href="/sticker-maker" className={`${styles.btn} ${styles.secondary}`}>Continue Shopping</Link>
@@ -381,7 +399,7 @@ export default function CartPage() {
                     <p>Placing this order does not approve artwork for printing. You will review and approve the final proof separately. Changes require a new approval.</p>
                   </fieldset>
                   {checkoutError && <p role="alert" className={styles["checkout-error"]}>{checkoutError}</p>}
-                  <button type="submit" className={`${styles.btn} ${styles.primary}`} disabled={submittingOrder || !termsAccepted || !rightsConfirmed}>
+                  <button type="submit" className={`${styles.btn} ${styles.primary}`} disabled={submittingOrder || updating || pricingBusy || !!pricingError || !termsAccepted || !rightsConfirmed}>
                     {submittingOrder ? "Placing Order..." : "Place Order"}
                   </button>
                 </form>

@@ -4,7 +4,9 @@ import { useMemo } from "react";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { getStickerPricing } from "./pricing";
-import { getMylarPricing } from "./mylarPricing";
+import { getMylarPricing, mylarBagSizes } from "./mylarPricing";
+import { stickerQuantity } from "./sticker-pricing";
+import { checkoutTotals } from "./order-totals";
 
 const STORAGE_KEY = "elevate_cart_v1";
 
@@ -52,13 +54,16 @@ interface CartStore {
   currency: string;
   addItem: (params: AddItemParams) => Promise<string>;
   updateQuantity: (id: string, quantity: number) => Promise<void>;
+  refreshPrices: () => Promise<void>;
   removeItem: (id: string) => void;
   clear: () => void;
 }
 
-function computeMylarUnitPrice(size: CartSize, quantity: number): number {
-  if (!size?.id) return 0;
-  return getMylarPricing(size.id, quantity).unitPrice;
+async function priceItem(productType: "sticker" | "mylar", size: CartSize | string, quantity: number) {
+  if (productType === "sticker") return getStickerPricing(size, quantity);
+  const sizeData = mylarBagSizes.find((entry) => typeof size === "object" && entry.id === size.id);
+  if (!sizeData) throw new Error("Choose a valid bag size.");
+  return getMylarPricing(sizeData.id, Math.max(stickerQuantity(quantity), sizeData.tiers[0].qty));
 }
 
 function roundCurrency(n: number): number {
@@ -71,11 +76,7 @@ function cryptoRandom(): string {
     : "id-" + Math.random().toString(36).slice(2);
 }
 
-function isCustomSize(size: CartSize | string): size is CartSize {
-  return typeof size === "object" && size !== null && !!size.wIn && !!size.hIn;
-}
-
-const useCartStore = create<CartStore>()(
+export const useCartStore = create<CartStore>()(
   persist(
     (set, get) => ({
       items: [],
@@ -92,38 +93,18 @@ const useCartStore = create<CartStore>()(
         frontDesign = null,
         backDesign = null,
       }) => {
-        let unitPrice: number;
-        let subtotal: number;
-        let finalQty = quantity;
-
-        if (productType === "mylar") {
-          unitPrice = computeMylarUnitPrice(size as CartSize, quantity);
-          subtotal = roundCurrency(unitPrice * quantity);
-        } else if (isCustomSize(size)) {
-          const res = await fetch(
-            `/api/pricing?width=${size.wIn}&height=${size.hIn}&qty=${quantity}`,
-          );
-          const pricingResult = await res.json();
-          unitPrice = pricingResult.unitPrice;
-          subtotal = pricingResult.subtotal;
-          finalQty = pricingResult.qty;
-        } else {
-          const pricingResult = await getStickerPricing(size, quantity);
-          unitPrice = pricingResult.unitPrice;
-          subtotal = pricingResult.subtotal;
-          finalQty = pricingResult.qty;
-        }
+        const price = await priceItem(productType, size, quantity);
 
         const id = cryptoRandom();
         const item: CartItem = {
           id,
           productType,
           size,
-          quantity: finalQty,
+          quantity: price.qty,
           designFileId,
           previewUrl,
-          unitPrice,
-          subtotal,
+          unitPrice: price.unitPrice,
+          subtotal: price.subtotal,
           shape,
         };
 
@@ -139,45 +120,19 @@ const useCartStore = create<CartStore>()(
       },
 
       updateQuantity: async (id, quantity) => {
-        const items = get().items.map((item) => {
-          if (item.id !== id) return item;
+        const item = get().items.find((entry) => entry.id === id);
+        if (!item) return;
+        const price = await priceItem(item.productType, item.size, quantity);
+        set((state) => ({ items: state.items.map((entry) => entry.id === id ? { ...entry, quantity: price.qty, unitPrice: price.unitPrice, subtotal: price.subtotal } : entry) }));
+      },
 
-          if (item.productType === "mylar") {
-            const newQty = Math.max(1, Number(quantity || 1));
-            const unitPrice = computeMylarUnitPrice(
-              item.size as CartSize,
-              newQty,
-            );
-            return {
-              ...item,
-              quantity: newQty,
-              unitPrice,
-              subtotal: roundCurrency(unitPrice * newQty),
-            };
-          }
-
-          return item;
-        });
-
-        const item = items.find((i) => i.id === id);
-        if (item && item.productType !== "mylar") {
-          const pricingResult = await getStickerPricing(item.size, quantity);
-          set({
-            items: items.map((i) =>
-              i.id === id
-                ? {
-                    ...i,
-                    quantity: pricingResult.qty,
-                    unitPrice: pricingResult.unitPrice,
-                    subtotal: pricingResult.subtotal,
-                  }
-                : i,
-            ),
-          });
-          return;
-        }
-
-        set({ items });
+      refreshPrices: async () => {
+        const snapshot = get().items;
+        const prices = await Promise.all(snapshot.map(async (item) => ({ id: item.id, previousQty: item.quantity, price: await priceItem(item.productType, item.size, item.quantity) })));
+        set((state) => ({ items: state.items.map((item) => {
+          const updated = prices.find((entry) => entry.id === item.id && entry.previousQty === item.quantity);
+          return updated ? { ...item, quantity: updated.price.qty, unitPrice: updated.price.unitPrice, subtotal: updated.price.subtotal } : item;
+        }) }));
       },
 
       removeItem: (id) => {
@@ -203,6 +158,7 @@ export function useCart() {
   const currency = useCartStore((s) => s.currency);
   const addItem = useCartStore((s) => s.addItem);
   const updateQuantity = useCartStore((s) => s.updateQuantity);
+  const refreshPrices = useCartStore((s) => s.refreshPrices);
   const removeItem = useCartStore((s) => s.removeItem);
   const clear = useCartStore((s) => s.clear);
 
@@ -216,22 +172,13 @@ export function useCart() {
     [items],
   );
 
-  const shipping = useMemo(() => {
-    if (subtotal >= 150) return 0;
-    return items.length > 0 ? 8.5 : 0;
-  }, [subtotal, items.length]);
-
-  const tax = useMemo(() => roundCurrency(subtotal * 0.06), [subtotal]);
-
-  const total = useMemo(
-    () => roundCurrency(subtotal + shipping + tax),
-    [subtotal, shipping, tax],
-  );
+  const { shipping, tax, total } = checkoutTotals(subtotal, items.length);
 
   return {
     state: { items, currency },
     addItem,
     updateQuantity,
+    refreshPrices,
     removeItem,
     clear,
     totalQty,
