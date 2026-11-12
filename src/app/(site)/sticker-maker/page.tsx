@@ -4,7 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useCart } from "@/lib/cart";
 import { getStickerPricing, type PricingResult } from "@/lib/pricing";
-import stickerPricingData from "@/lib/stickerPricingData";
+import { getStickerMinimum } from "@/lib/sticker-pricing";
+import { ARTWORK_ACCEPT, artworkPreview, releaseArtworkPreview, validateArtwork } from "@/lib/cart-artwork";
 import styles from "./sticker-maker.module.css";
 
 const SHAPES = [
@@ -36,20 +37,14 @@ const MATERIALS = [
   { id: "wall-stickers", name: "Wall Stickers", description: "Removable wall decals", preview: "linear-gradient(45deg, #a78bfa, #8b5cf6)" },
 ];
 
-function getMinQuantity(width: number, height: number) {
-  const sizeLabel = `${width}x${height}`;
-  const sizeData =
-    stickerPricingData.find((s) => s.size === sizeLabel) ||
-    stickerPricingData.find((s) => s.size === "custom");
-  return sizeData ? sizeData.minOrder.qty : 1;
-}
-
 export default function StickerMakerPage() {
   const router = useRouter();
   const { addItem } = useCart();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [showAlert, setShowAlert] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [artworkError, setArtworkError] = useState("");
   const [uploadedImage, setUploadedImage] = useState<string | null>(null);
   const [rawFile, setRawFile] = useState<File | null>(null);
   const [selectedShape, setSelectedShape] = useState("square");
@@ -58,13 +53,15 @@ export default function StickerMakerPage() {
   const [selectedPreset, setSelectedPreset] = useState("small");
   const [selectedMaterial, setSelectedMaterial] = useState("matte");
   const [quantity, setQuantity] = useState(56);
-  const [currentPricing, setCurrentPricing] = useState<PricingResult>({
-    unitPrice: 0,
-    subtotal: 0,
-    qty: 0,
-  });
+  const [quote, setQuote] = useState<{ key: string; price: PricingResult; error: string }>({ key: "", price: { unitPrice: 0, subtotal: 0, qty: 0 }, error: "" });
 
-  const minQuantity = getMinQuantity(selectedWidth, selectedHeight);
+  let minQuantity = 1;
+  try { minQuantity = getStickerMinimum({ wIn: selectedWidth, hIn: selectedHeight }); } catch { /* Show the validation error in Pricing. */ }
+  const effectiveQuantity = Math.max(quantity, minQuantity);
+  const pricingKey = `${selectedWidth}:${selectedHeight}:${effectiveQuantity}`;
+  const pricingBusy = quote.key !== pricingKey;
+  const pricingError = pricingBusy ? "" : quote.error;
+  const currentPricing = quote.price;
   const stickerArea = selectedWidth * selectedHeight;
 
   const maxSize = 200;
@@ -73,50 +70,62 @@ export default function StickerMakerPage() {
   const previewHeight = Math.min(selectedHeight * ratio * 20, maxSize);
 
   useEffect(() => {
-    const sizeLabel = `${selectedWidth}x${selectedHeight}`;
-    getStickerPricing(sizeLabel, quantity).then(setCurrentPricing);
-  }, [selectedWidth, selectedHeight, quantity]);
-
-  useEffect(() => {
-    if (quantity < minQuantity) setQuantity(minQuantity);
-  }, [selectedWidth, selectedHeight, minQuantity, quantity]);
+    let cancelled = false;
+    getStickerPricing({ wIn: selectedWidth, hIn: selectedHeight }, effectiveQuantity)
+      .then((price) => {
+        if (!cancelled) setQuote({ key: pricingKey, price, error: "" });
+      })
+      .catch((error) => {
+        if (!cancelled) setQuote({ key: pricingKey, price: { unitPrice: 0, subtotal: 0, qty: 0 }, error: error instanceof Error ? error.message : "Unable to calculate this price." });
+      });
+    return () => { cancelled = true; };
+  }, [selectedWidth, selectedHeight, effectiveQuantity, pricingKey]);
 
   const applyPresetSize = (presetId: string) => {
     const preset = PRESET_SIZES.find((s) => s.id === presetId);
     if (preset) {
       setSelectedWidth(preset.width);
       setSelectedHeight(preset.height);
-      setQuantity(getMinQuantity(preset.width, preset.height));
+      setQuantity(getStickerMinimum({ wIn: preset.width, hIn: preset.height }));
     }
   };
 
   const handleFile = (file: File) => {
-    setRawFile(file);
-    const reader = new FileReader();
-    reader.onload = (e) => setUploadedImage(e.target?.result as string);
-    reader.readAsDataURL(file);
+    try {
+      validateArtwork(file);
+      setArtworkError("");
+      setRawFile(file);
+      setUploadedImage(artworkPreview(file));
+    } catch (error) {
+      setArtworkError(error instanceof Error ? error.message : "Unable to open this artwork.");
+    }
   };
 
+  useEffect(() => () => releaseArtworkPreview(uploadedImage), [uploadedImage]);
+
   const onAddToCart = async () => {
+    if (pricingBusy || pricingError || adding) return false;
+    setAdding(true);
+    setArtworkError("");
     try {
       await addItem({
         size: { wIn: selectedWidth, hIn: selectedHeight, label: `${selectedWidth}x${selectedHeight}` },
         material: selectedMaterial,
-        quantity,
+        quantity: effectiveQuantity,
         designFileId: rawFile,
-        previewUrl: uploadedImage,
         shape: selectedShape,
       });
       setShowAlert(true);
       setTimeout(() => setShowAlert(false), 3000);
-    } catch (err) {
-      console.error("Failed to add item:", err);
-    }
+      return true;
+    } catch (error) {
+      setArtworkError(error instanceof Error ? error.message : "Unable to add this item. Please try again.");
+      return false;
+    } finally { setAdding(false); }
   };
 
   const orderNow = async () => {
-    await onAddToCart();
-    router.push("/cart");
+    if (await onAddToCart()) router.push("/cart");
   };
 
   return (
@@ -153,14 +162,15 @@ export default function StickerMakerPage() {
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept=".pdf,.ai,.cdr,.jpg,.jpeg,.png"
+                  aria-label="Upload artwork"
+                  accept={ARTWORK_ACCEPT}
                   style={{ display: "none" }}
                   onChange={(e) => {
                     const file = e.target.files?.[0];
                     if (file) handleFile(file);
                   }}
                 />
-                {!uploadedImage ? (
+                {!rawFile ? (
                   <div className={styles["upload-placeholder"]}>
                     <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                       <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
@@ -168,19 +178,21 @@ export default function StickerMakerPage() {
                       <line x1="12" y1="15" x2="12" y2="3" />
                     </svg>
                     <p>Click to upload or drag and drop</p>
-                    <span>PDF, AI, CDR, JPG, PNG up to 10MB</span>
+                    <span>PDF, AI, CDR, JPG, PNG up to 4MB</span>
                   </div>
                 ) : (
                   <div className={styles["uploaded-image"]}>
                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={uploadedImage} alt="Uploaded design" />
+                    {uploadedImage ? <img src={uploadedImage} alt="Uploaded design" /> : <p>{rawFile.name}<br />Original file attached. Preview unavailable for this format.</p>}
                     <button
                       type="button"
+                      aria-label="Remove artwork"
                       className={styles["remove-image"]}
                       onClick={(e) => {
                         e.stopPropagation();
                         setUploadedImage(null);
                         setRawFile(null);
+                        setArtworkError("");
                         if (fileInputRef.current) fileInputRef.current.value = "";
                       }}
                     >
@@ -189,6 +201,8 @@ export default function StickerMakerPage() {
                   </div>
                 )}
               </div>
+              {rawFile && <p>{rawFile.name}</p>}
+              {artworkError && <p role="alert">{artworkError}</p>}
             </div>
 
             <div className={styles["design-options"]}>
@@ -291,9 +305,9 @@ export default function StickerMakerPage() {
               <div className={styles["option-group"]}>
                 <label>Quantity</label>
                 <div className={styles["quantity-selector"]}>
-                  <button type="button" onClick={() => quantity > minQuantity && setQuantity(quantity - 1)} disabled={quantity <= minQuantity}>-</button>
-                  <input type="number" value={quantity} min={minQuantity} max={10000} onChange={(e) => setQuantity(Number(e.target.value))} />
-                  <button type="button" onClick={() => quantity < 10000 && setQuantity(quantity + 1)}>+</button>
+                  <button type="button" onClick={() => effectiveQuantity > minQuantity && setQuantity(effectiveQuantity - 1)} disabled={effectiveQuantity <= minQuantity}>-</button>
+                  <input type="number" value={effectiveQuantity} min={minQuantity} max={10000} onChange={(e) => setQuantity(Number(e.target.value))} />
+                  <button type="button" onClick={() => effectiveQuantity < 10000 && setQuantity(effectiveQuantity + 1)}>+</button>
                 </div>
                 {minQuantity > 1 && (
                   <div className={styles["min-quantity-notice"]}>
@@ -319,7 +333,7 @@ export default function StickerMakerPage() {
                 >
                   {!uploadedImage && (
                     <div className={styles["preview-placeholder"]}>
-                      <p>Your design will appear here</p>
+                      <p>{rawFile ? "Original file attached. No image preview for this format." : "Your design will appear here"}</p>
                     </div>
                   )}
                 </div>
@@ -333,7 +347,9 @@ export default function StickerMakerPage() {
 
             <div className={styles["pricing-section"]}>
               <h3>Pricing</h3>
-              <div className={styles["price-breakdown"]}>
+              <div className={styles["price-breakdown"]} aria-busy={pricingBusy}>
+                {pricingBusy && <p role="status">Calculating price…</p>}
+                {pricingError && <p role="alert">{pricingError}</p>}
                 <div className={styles["price-row"]}>
                   <span>Price per sticker</span>
                   <span>${currentPricing.unitPrice.toFixed(2)}</span>
@@ -354,8 +370,8 @@ export default function StickerMakerPage() {
                 )}
               </div>
               <div className={styles["action-buttons"]}>
-                <button type="button" className={`${styles.btn} ${styles.secondary}`} onClick={onAddToCart}>Add to Cart</button>
-                <button type="button" className={`${styles.btn} ${styles.primary}`} onClick={orderNow} disabled={!uploadedImage}>Order Now</button>
+                <button type="button" className={`${styles.btn} ${styles.secondary}`} onClick={onAddToCart} disabled={pricingBusy || !!pricingError || adding}>Add to Cart</button>
+                <button type="button" className={`${styles.btn} ${styles.primary}`} onClick={orderNow} disabled={!rawFile || pricingBusy || !!pricingError || adding}>Order Now</button>
               </div>
             </div>
           </div>

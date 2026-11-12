@@ -1,11 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCart, type CartItem, type CartSize } from "@/lib/cart";
 import { supabase } from "@/lib/supabase";
 import { TERMS_VERSION } from "@/lib/terms";
+import { FREE_SHIPPING_SUBTOTAL } from "@/lib/order-totals";
+import { ARTWORK_ACCEPT } from "@/lib/cart-artwork";
+import { prepareCheckoutItems, uploadCartArtwork } from "@/lib/checkout-artwork";
 import styles from "./cart.module.css";
 
 const SHAPES = [
@@ -48,11 +51,14 @@ export default function CartPage() {
   const cart = useCart();
 
   const [updating, setUpdating] = useState(false);
+  const [pricingBusy, setPricingBusy] = useState(true);
+  const [pricingError, setPricingError] = useState("");
   const [showCheckoutModal, setShowCheckoutModal] = useState(false);
   const [submittingOrder, setSubmittingOrder] = useState(false);
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [rightsConfirmed, setRightsConfirmed] = useState(false);
   const [checkoutError, setCheckoutError] = useState("");
+  const [artworkError, setArtworkError] = useState("");
   const [checkoutData, setCheckoutData] = useState({
     email: "",
     name: "",
@@ -65,6 +71,25 @@ export default function CartPage() {
   });
 
   const cartItems = cart.state.items;
+  const refreshPrices = cart.refreshPrices;
+  const restoreArtwork = cart.restoreArtwork;
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([refreshPrices(), restoreArtwork()]).catch((error) => {
+      if (!cancelled) setPricingError(error instanceof Error ? error.message : "Unable to verify cart prices.");
+    }).finally(() => { if (!cancelled) setPricingBusy(false); });
+    return () => { cancelled = true; };
+  }, [refreshPrices, restoreArtwork]);
+
+  const attachArtwork = async (itemId: string, file: File) => {
+    setUpdating(true);
+    setArtworkError("");
+    try {
+      await cart.attachArtwork(itemId, file);
+    } catch (error) {
+      setArtworkError(error instanceof Error ? error.message : "Unable to attach this artwork. Please try again.");
+    } finally { setUpdating(false); }
+  };
 
   const updateQuantity = async (itemId: string, newQuantity: number) => {
     if (newQuantity < 1 || updating) return;
@@ -78,11 +103,11 @@ export default function CartPage() {
     }
   };
 
-  const removeItem = (itemId: string) => {
+  const removeItem = async (itemId: string) => {
     if (updating) return;
     setUpdating(true);
     try {
-      cart.removeItem(itemId);
+      await cart.removeItem(itemId);
     } finally {
       setUpdating(false);
     }
@@ -97,38 +122,16 @@ export default function CartPage() {
     setCheckoutData({ email: "", name: "", phone: "", street: "", city: "", state: "", zipCode: "", notes: "" });
   };
 
-  const uploadStickerFile = async (file: File, id: string) => {
-    const formData = new FormData();
-    formData.append("file", file, `${id}-${file.name}`);
-    const res = await fetch("/api/orders/upload", { method: "POST", body: formData });
-    const data = await res.json();
-    if (!res.ok || !data.url) throw new Error(data.error || "Artwork upload failed.");
-    return data.url as string;
-  };
-
   const submitOrder = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!cartItems.length) return;
+    if (!cartItems.length || pricingBusy || pricingError || updating) return;
     setCheckoutError("");
     if (!termsAccepted || !rightsConfirmed) { setCheckoutError("Please accept the terms and confirm your artwork rights."); return; }
 
     setSubmittingOrder(true);
     try {
-      const processedItems = [];
-      for (const item of cartItems) {
-        const designFile = item.designFileId;
-        if (item.productType === "sticker" && designFile instanceof File) {
-          const url = await uploadStickerFile(designFile, item.id);
-          processedItems.push({
-            ...item,
-            designFileUrl: url,
-            previewUrl: null,
-            designFileId: null,
-          });
-        } else {
-          processedItems.push({ ...item, previewUrl: null, designFileId: null });
-        }
-      }
+      const restoredItems = await restoreArtwork();
+      const processedItems = await prepareCheckoutItems(restoredItems, uploadCartArtwork);
 
       const { data: { user } } = await supabase.auth.getUser();
       const orderPayload = {
@@ -145,10 +148,15 @@ export default function CartPage() {
         body: JSON.stringify(orderPayload),
       });
       const data = await res.json();
+      if (res.status === 409 && data.code === "PRICE_CHANGED") {
+        await refreshPrices();
+        setCheckoutError("Prices have been updated. Review the order summary, then place your order again.");
+        return;
+      }
       if (!res.ok || !data.success) throw new Error(data.error || "Unable to place the order. Please try again.");
 
       if (data.success) {
-        cart.clear();
+        await cart.clear();
         router.push(`/track/${data.order.track_id}`);
       }
     } catch (error) {
@@ -196,7 +204,7 @@ export default function CartPage() {
                           // eslint-disable-next-line @next/next/no-img-element
                           <img src={item.previewUrl} alt="Sticker design" width="100%" />
                         ) : (
-                          <div className={styles.placeholder}>{item.productType}</div>
+                          <div className={styles.placeholder}>{item.artworkName ? "Artwork" : item.productType}</div>
                         )}
                       </div>
                     )}
@@ -211,11 +219,26 @@ export default function CartPage() {
                         <span className={styles["item-shape"]}>Shape: {getShapeName(item.shape)}</span>
                       )}
                     </div>
+                    {item.productType === "sticker" && (
+                      <div className={styles["item-artwork"]}>
+                        <p role={item.artworkMissing ? "alert" : undefined}>
+                          {item.artworkMissing ? `Attach your artwork again${item.artworkName ? `: ${item.artworkName}` : "."}` : item.artworkName || "No artwork attached"}
+                        </p>
+                        <label htmlFor={`artwork-${item.id}`}>{item.artworkExpected ? "Replace artwork" : "Attach artwork"}</label>
+                        <p>PDF, AI, CDR, JPG or PNG, up to 4 MB.</p>
+                        <input id={`artwork-${item.id}`} type="file" accept={ARTWORK_ACCEPT} disabled={updating || submittingOrder}
+                          onChange={(event) => {
+                            const file = event.currentTarget.files?.[0];
+                            event.currentTarget.value = "";
+                            if (file) void attachArtwork(item.id, file);
+                          }} />
+                      </div>
+                    )}
                   </div>
                   <div className={styles["item-quantity"]}>
                     <button type="button" onClick={() => updateQuantity(item.id, item.quantity - 1)} disabled={item.quantity <= 1 || updating}>-</button>
                     <span>{item.quantity}</span>
-                    <button type="button" onClick={() => updateQuantity(item.id, item.quantity + 1)} disabled={updating}>+</button>
+                    <button type="button" onClick={() => updateQuantity(item.id, item.quantity + 1)} disabled={updating || item.quantity >= 10000}>+</button>
                   </div>
                   <div className={styles["item-price"]}>
                     <span className={styles.price}>${item.subtotal}</span>
@@ -229,6 +252,10 @@ export default function CartPage() {
             <div className={styles["cart-summary"]}>
               <div className={styles["summary-card"]}>
                 <h3>Order Summary</h3>
+                {pricingBusy && <p role="status">Checking prices and artwork…</p>}
+                {pricingError && <p role="alert">{pricingError} <button type="button" onClick={() => { setPricingBusy(true); Promise.all([refreshPrices(), restoreArtwork()]).then(() => setPricingError("")).catch(error => setPricingError(error.message)).finally(() => setPricingBusy(false)); }}>Try again</button></p>}
+                {artworkError && <p role="alert">{artworkError}</p>}
+                {cartItems.some((item) => item.artworkMissing) && <p role="alert">An artwork file is missing. Attach it again above before checking out.</p>}
                 <div className={styles["summary-row"]}>
                   <span>Subtotal ({cart.totalQty} items)</span>
                   <span>${cart.subtotal}</span>
@@ -247,11 +274,11 @@ export default function CartPage() {
                 </div>
                 {cart.shipping > 0 && (
                   <div className={styles["shipping-notice"]}>
-                    <p>Add ${(50 - cart.subtotal).toFixed(2)} more for free shipping!</p>
+                    <p>Add ${Math.max(0, FREE_SHIPPING_SUBTOTAL - cart.subtotal).toFixed(2)} more for free shipping!</p>
                   </div>
                 )}
                 <div className={styles["checkout-actions"]}>
-                  <button type="button" className={`${styles.btn} ${styles.primary} ${styles["checkout-btn"]}`} onClick={() => setShowCheckoutModal(true)} disabled={updating}>
+                  <button type="button" className={`${styles.btn} ${styles.primary} ${styles["checkout-btn"]}`} onClick={() => setShowCheckoutModal(true)} disabled={updating || pricingBusy || !!pricingError || cartItems.some((item) => item.artworkMissing)}>
                     Proceed to Checkout
                   </button>
                   <Link href="/sticker-maker" className={`${styles.btn} ${styles.secondary}`}>Continue Shopping</Link>
@@ -381,7 +408,7 @@ export default function CartPage() {
                     <p>Placing this order does not approve artwork for printing. You will review and approve the final proof separately. Changes require a new approval.</p>
                   </fieldset>
                   {checkoutError && <p role="alert" className={styles["checkout-error"]}>{checkoutError}</p>}
-                  <button type="submit" className={`${styles.btn} ${styles.primary}`} disabled={submittingOrder || !termsAccepted || !rightsConfirmed}>
+                  <button type="submit" className={`${styles.btn} ${styles.primary}`} disabled={submittingOrder || updating || pricingBusy || !!pricingError || !termsAccepted || !rightsConfirmed}>
                     {submittingOrder ? "Placing Order..." : "Place Order"}
                   </button>
                 </form>

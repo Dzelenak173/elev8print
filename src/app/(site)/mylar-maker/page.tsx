@@ -24,7 +24,7 @@ export default function MylarMakerPage() {
     return getMylarPricing(selectedSize, quantity);
   }, [selectedSize, quantity]);
 
-  const canPlaceOrder = selectedSize && quantity > 0;
+  const canPlaceOrder = !!selectedSizeInfo && Number.isSafeInteger(quantity) && quantity >= (selectedSizeInfo.tiers[0]?.qty || 1) && quantity <= 10000;
 
   const getMinQuantity = () => {
     if (!selectedSizeInfo) return 1;
@@ -135,8 +135,8 @@ export default function MylarMakerPage() {
               <h3>Quantity</h3>
               <div className={styles["quantity-selector"]}>
                 <button type="button" onClick={() => quantity > minQty && setQuantity(quantity - 1)} disabled={quantity <= minQty}>-</button>
-                <input type="number" value={quantity} min={minQty} max={10000} onChange={(e) => setQuantity(Number(e.target.value))} />
-                <button type="button" onClick={() => setQuantity(quantity + 1)}>+</button>
+                <input type="number" value={quantity} min={minQty} max={10000} onChange={(e) => setQuantity(Number(e.target.value))} onBlur={() => setQuantity(Math.min(10000, Math.max(minQty, Math.floor(quantity) || minQty)))} />
+                <button type="button" onClick={() => setQuantity(quantity + 1)} disabled={quantity >= 10000}>+</button>
               </div>
               {selectedSizeInfo && (
                 <div className={styles["quantity-tiers"]}>
