@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import styles from "./contact.module.css";
+import { OFFICE_EMAIL } from "@/lib/business-contact";
 
 export default function ContactPage() {
   const [name, setName] = useState("");
@@ -112,7 +113,7 @@ export default function ContactPage() {
                 </svg>
               </div>
               <h3>Email</h3>
-              <p>admin@elaborate-designs.com</p>
+              <p><a href={`mailto:${OFFICE_EMAIL}`}>{OFFICE_EMAIL}</a></p>
             </div>
             <div className={styles["info-card"]}>
               <div className={styles["info-icon"]}>

@@ -6,6 +6,7 @@ import { requireCheckoutConsent, validEmail } from "@/lib/approval-policy";
 import { TERMS_VERSION, termsSnapshot } from "@/lib/terms";
 import { quoteOrder, orderMatchesQuote } from "@/lib/checkout-pricing";
 import { PricingInputError } from "@/lib/sticker-pricing";
+import { OFFICE_EMAIL } from "@/lib/business-contact";
 
 function generateTrackId() {
   return Math.floor(100000 + Math.random() * 900000).toString();
@@ -80,11 +81,14 @@ export async function POST(request: Request) {
         email: "admin@elaborate-designs.com",
         name: "Elev8 Print",
       },
+      replyTo: OFFICE_EMAIL,
       subject: `Your Elev8 Print Order #${track_id} Confirmation`,
       text: `Hi ${customer.name}, thank you for your order!
 
 Your order ID is ${track_id} and your total is $${total}.
-You can track your order here: https://elev8print.com/track/${track_id}`,
+You can track your order here: https://elev8print.com/track/${track_id}
+
+Questions? Reply to this email or contact ${OFFICE_EMAIL}.`,
 
       html: `
   <div style="font-family: Arial, sans-serif; background-color:#f6f6f6; padding:30px;">
@@ -119,7 +123,7 @@ You can track your order here: https://elev8print.com/track/${track_id}`,
 
           <p style="color:#6b7280; font-size:13px; margin-top:40px; line-height:1.5;">
             If you have any questions, simply reply to this email or contact our support team at 
-            <a href="mailto:admin@elaborate-designs.com" style="color:#2563eb;">admin@elaborate-designs.com</a>.
+            <a href="mailto:${OFFICE_EMAIL}" style="color:#2563eb;">${OFFICE_EMAIL}</a>.
           </p>
         </td>
       </tr>
@@ -132,15 +136,13 @@ You can track your order here: https://elev8print.com/track/${track_id}`,
   </div>`,
     };
 
-    sgMail.send(msg).catch((err) => console.error("SendGrid error", err));
-
-    const adminEmail = "admin@elaborate-designs.com";
     const adminMsg = {
-      to: adminEmail,
+      to: OFFICE_EMAIL,
       from: {
-        email: adminEmail,
+        email: "admin@elaborate-designs.com",
         name: "Elev8 Print — Order Bot",
       },
+      replyTo: customer.email,
       subject: `New Order #${track_id} from ${customer.name}`,
       text: `New order received.
 
@@ -175,9 +177,19 @@ https://elev8print.com/admin
   `,
     };
 
-    sgMail.send(adminMsg).catch((err) =>
-      console.error("SendGrid admin email error", err)
+    // Finish both send attempts before the serverless response ends. Once the
+    // order is stored, a mail failure must not invite a duplicate order retry.
+    const deliveries = await Promise.allSettled(
+      [msg, adminMsg].map(async (message) => sgMail.send(message))
     );
+    deliveries.forEach((delivery, index) => {
+      if (delivery.status === "rejected") {
+        console.error(
+          index === 0 ? "SendGrid error" : "SendGrid admin email error",
+          delivery.reason
+        );
+      }
+    });
 
     return NextResponse.json({ success: true, order: data[0] });
   } catch (err) {
