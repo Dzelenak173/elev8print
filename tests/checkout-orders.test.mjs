@@ -1,16 +1,16 @@
 import { before, beforeEach, after, mock, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { TERMS_VERSION } from '../src/lib/terms.ts';
-let POST, writes, messages;
+let POST, writes, messages, sendEmail;
 before(async () => {
   mock.module('../src/lib/supabase-admin.ts', { namedExports: { supabase: { from(table) {
     assert.equal(table, 'orders');
     return { insert(rows) { writes.push(...rows); return { async select() { return { data: [{ id: 'fictional-order', ...rows[0] }], error: null }; } }; } };
   } } } });
-  mock.module('../src/lib/sendgrid.ts', { defaultExport: { async send(message) { messages.push(message); } } });
+  mock.module('../src/lib/sendgrid.ts', { defaultExport: { async send(message) { messages.push(message); return sendEmail(message); } } });
   ({ POST } = await import('../src/app/api/orders/route.ts'));
 });
-beforeEach(() => { writes = []; messages = []; });
+beforeEach(() => { writes = []; messages = []; sendEmail = async () => {}; });
 after(() => mock.restoreAll());
 const item = { id: 'fictional-item', productType: 'sticker', size: { wIn: 2, hIn: 2 }, quantity: 500, material: 'matte', shape: 'square', unitPrice: .264, subtotal: 132 };
 function request(changes = {}) {
@@ -50,7 +50,44 @@ test('valid order stores server-calculated prices and retains both required cons
   assert.ok(writes[0].terms_accepted_at);
   assert.ok(writes[0].artwork_rights_accepted_at);
   assert.equal(messages.length, 2);
+  assert.equal(messages[0].to, 'fictional@example.invalid');
+  assert.equal(messages[0].from.email, 'admin@elaborate-designs.com');
+  assert.equal(messages[0].replyTo, 'office@elev8print.com');
+  assert.match(messages[0].text, /office@elev8print\.com/);
+  assert.match(messages[0].html, /mailto:office@elev8print\.com/);
+  assert.equal(messages[1].to, 'office@elev8print.com');
+  assert.equal(messages[1].from.email, 'admin@elaborate-designs.com');
+  assert.equal(messages[1].replyTo, 'fictional@example.invalid');
   assert.match(messages[0].text, /148\.42/);
+});
+test('order response waits for both email attempts to finish', async () => {
+  const finish = [];
+  sendEmail = () => new Promise(resolve => finish.push(resolve));
+  let responded = false;
+  const pending = POST(request()).then(response => { responded = true; return response; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(finish.length, 2);
+  assert.equal(responded, false);
+  finish[0]();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(responded, false);
+  finish[1]();
+  assert.equal((await pending).status, 200);
+  assert.equal(writes.length, 1);
+});
+test('a rejected customer email still attempts the office alert and preserves the saved order', async () => {
+  const errors = [];
+  const logger = mock.method(console, 'error', (...args) => errors.push(args));
+  try {
+    sendEmail = async message => { if (message.to === 'fictional@example.invalid') throw new Error('Fictional provider rejection'); };
+    const response = await POST(request());
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).success, true);
+    assert.equal(writes.length, 1);
+    assert.equal(messages.length, 2);
+    assert.equal(messages[1].to, 'office@elev8print.com');
+    assert.equal(errors.length, 1);
+  } finally { logger.mock.restore(); }
 });
 test('pricing changes do not bypass artwork-rights or terms acceptance', async () => {
   assert.equal((await POST(request({ acceptance: { termsAccepted: true, rightsConfirmed: false, termsVersion: TERMS_VERSION } }))).status, 400);

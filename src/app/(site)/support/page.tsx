@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import styles from "./support.module.css";
+import { OFFICE_EMAIL } from "@/lib/business-contact";
 
 const SECTIONS = [
   { id: "design", title: "Design Prep" },
@@ -127,7 +128,7 @@ export default function SupportPage() {
                 { q: "Can you print in RGB?", a: "No, we print in CMYK. RGB is for uses such as a computer or phone. Printing in CMYK will create stickers more accurately." },
                 { q: "Can you print gradients on stickers?", a: "Yes, we can!" },
                 { q: "Can you print photos/illustrations as stickers?", a: "Yes, we can!" },
-                { q: "Can you print white ink on transparent stickers?", a: "No, unfortunately we cannot." },
+                { q: "Can you print white ink on transparent stickers?", a: "Yes! We can print white ink on compatible clear vinyl with our UV printer. Request white artwork or a white base beneath color, and we will confirm the placement in your proof." },
                 { q: "Can you print stickers with Pantone colors?", a: "Not exactly, our printing is done within the CMYK color palette. You can save your colors as a spot color and we will print your design as close to that as possible." },
                 { q: "Can you print on the back of the stickers?", a: "No, unfortunately we cannot." },
               ].map((item) => (
@@ -138,11 +139,12 @@ export default function SupportPage() {
               ))}
               <div className={styles["faq-item"]}>
                 <h3>Are you able to print stickers in white?</h3>
-                <p>No, not technically. Our plotter prints using the colors in cyan, magenta, yellow, and black. Any white areas in your design are going to be the same color as the material you choose.</p>
+                <p>Yes! Our UV printer can print white ink, including white artwork and a white base beneath color on compatible materials.</p>
                 <ul>
-                  <li>Simple stickers such as matte, window perf, and heat transfer are printed on white materials</li>
-                  <li>Materials, such as clear and holographic, have a pre-set layer and any white areas in your design will be the same color as the material</li>
+                  <li>On white materials, unprinted areas can show the white material itself.</li>
+                  <li>On compatible clear or holographic vinyl, we can add white ink while leaving other areas transparent or holographic.</li>
                 </ul>
+                <p>Tell us where white ink is needed. We will confirm material compatibility and white ink placement in the proof before printing.</p>
               </div>
             </div>
           )}
@@ -196,11 +198,11 @@ export default function SupportPage() {
                 <h3>What if my art&apos;s resolution is low?</h3>
                 <p>PDF, AI, and CDR files will have the highest possible resolution and offer you the best product outcome, as long as the file is vectorized.</p>
                 <p><strong>Low resolution options:</strong> If your file has a low resolution warning your design will most likely come out looking alright, but the lines and shapes may be affected. To combat this, we suggest you to vectorize your file or have a minimum of 300 DPI in the final scale of your print.</p>
-                <div className={styles.tip}>If you have any questions about the resolution of your file, please email us admin@elaborate-designs.com and we can help you get the best image possible.</div>
+                <div className={styles.tip}>If you have any questions about the resolution of your file, please email us {OFFICE_EMAIL} and we can help you get the best image possible.</div>
               </div>
               <div className={styles["faq-item"]}>
                 <h3>Can you help me with touch ups to my art?</h3>
-                <p>We can cooperate with you to help prepare your designs for print. Feel free to email us at admin@elaborate-designs.com and we can help you adjust your artwork to the best of our abilities.</p>
+                <p>We can cooperate with you to help prepare your designs for print. Feel free to email us at {OFFICE_EMAIL} and we can help you adjust your artwork to the best of our abilities.</p>
               </div>
               <div className={styles["faq-item"]}>
                 <h3>What is our minimum order for custom stickers?</h3>
@@ -215,7 +217,7 @@ export default function SupportPage() {
       <div className={styles["contact-section"]}>
         <div className={styles.container}>
           <h2>Still have questions?</h2>
-          <p>Contact us at <a href="mailto:admin@elaborate-designs.com">admin@elaborate-designs.com</a></p>
+          <p>Contact us at <a href={`mailto:${OFFICE_EMAIL}`}>{OFFICE_EMAIL}</a></p>
         </div>
       </div>
     </div>

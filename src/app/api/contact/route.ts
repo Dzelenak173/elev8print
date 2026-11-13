@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import sgMail from "@/lib/sendgrid";
+import { OFFICE_EMAIL } from "@/lib/business-contact";
 
 function isEmail(s = "") {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
@@ -26,7 +27,6 @@ export async function POST(request: Request) {
       );
     }
 
-    const adminEmail = "admin@elaborate-designs.com";
     const safeName = name.trim();
     const safeMsg = message.trim();
     const safePhone = String(phone || "").trim();
@@ -64,8 +64,10 @@ ${safeMsg}
     `;
 
     await sgMail.send({
-      to: adminEmail,
-      from: { email: adminEmail, name: "Elev8 Print — Website" },
+      to: OFFICE_EMAIL,
+      // Retain the existing SendGrid sender; changing the receiving inbox does
+      // not establish that the new address is an authorized sender.
+      from: { email: "admin@elaborate-designs.com", name: "Elev8 Print — Website" },
       replyTo: email,
       subject: `[Contact] ${subject} — ${safeName}`,
       text: textBody,
